@@ -1,0 +1,264 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>Your Progress Report – Hove Personal Training</title>
+  <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body {
+      font-family: 'Helvetica Neue', Arial, sans-serif;
+      background: #f0f2f5;
+      color: #1a1a2e;
+      font-size: 14px;
+      line-height: 1.5;
+    }
+    .page { width: 794px; min-height: 1123px; margin: 0 auto; background: #fff; }
+
+    /* HEADER */
+    .header {
+      background: #071a2f;
+      padding: 32px 40px 28px;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+    }
+    .header-logo { display: flex; align-items: center; gap: 14px; }
+    .header-logo img { height: 52px; filter: brightness(0) invert(1); }
+    .brand-name { font-size: 17px; font-weight: 700; color: #fff; }
+    .brand-sub { font-size: 11px; color: #c9a84c; text-transform: uppercase; letter-spacing: 1.2px; margin-top: 2px; }
+    .header-right { text-align: right; }
+    .report-label { font-size: 11px; color: #c9a84c; text-transform: uppercase; letter-spacing: 1.4px; margin-bottom: 4px; }
+    .report-period { font-size: 15px; color: #fff; font-weight: 600; }
+
+    /* GREETING */
+    .greeting-strip {
+      background: #0d2847;
+      padding: 18px 40px;
+      border-bottom: 3px solid #c9a84c;
+    }
+    .greeting-name { font-size: 22px; font-weight: 700; color: #fff; margin-bottom: 6px; }
+    .greeting-para { font-size: 13px; color: #a8bcd0; max-width: 580px; line-height: 1.6; }
+
+    /* BODY */
+    .body { padding: 32px 40px 40px; }
+    .section-label {
+      font-size: 10px; text-transform: uppercase; letter-spacing: 1.6px;
+      color: #c9a84c; font-weight: 700; margin-bottom: 12px; margin-top: 24px;
+    }
+
+    /* STATS */
+    .stats-row { display: flex; gap: 16px; margin-bottom: 8px; }
+    .stat-card {
+      flex: 1; background: #071a2f; border-radius: 10px;
+      padding: 20px 18px; color: #fff; position: relative; overflow: hidden;
+    }
+    .stat-card::after {
+      content: ''; position: absolute; top: 0; right: 0;
+      width: 4px; height: 100%; background: #c9a84c; border-radius: 0 10px 10px 0;
+    }
+    .stat-value { font-size: 36px; font-weight: 800; color: #c9a84c; line-height: 1; margin-bottom: 6px; }
+    .stat-unit { font-size: 14px; font-weight: 400; color: #a8bcd0; margin-left: 4px; }
+    .stat-label { font-size: 12px; color: #a8bcd0; text-transform: uppercase; letter-spacing: 0.8px; }
+    .stat-sublabel { font-size: 11px; color: #4a6a8a; margin-top: 4px; }
+
+    /* CHARTS */
+    .charts-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 20px; margin-bottom: 8px; }
+    .chart-card {
+      background: #fff; border: 1px solid #e8ecf0; border-radius: 10px;
+      padding: 20px; box-shadow: 0 2px 8px rgba(7,26,47,0.06);
+    }
+    .chart-card.full-width { grid-column: span 2; }
+    .chart-exercise-name { font-size: 13px; font-weight: 700; color: #071a2f; margin-bottom: 2px; }
+    .chart-best { font-size: 11px; color: #4a6a8a; margin-bottom: 14px; }
+    .chart-best span { color: #c9a84c; font-weight: 700; }
+    .chart-wrap { height: 140px; }
+
+    /* TABLE */
+    .summary-table { width: 100%; border-collapse: collapse; margin-bottom: 8px; }
+    .summary-table th {
+      background: #071a2f; color: #c9a84c; font-size: 10px;
+      text-transform: uppercase; letter-spacing: 1px; padding: 10px 14px; text-align: left;
+    }
+    .summary-table td { padding: 10px 14px; border-bottom: 1px solid #f0f2f5; font-size: 13px; }
+    .summary-table tr:nth-child(even) td { background: #f8f9fb; }
+    .badge { display: inline-block; padding: 2px 9px; border-radius: 20px; font-size: 11px; font-weight: 600; }
+    .badge-up { background: #e6f7ef; color: #1e8a4a; }
+    .badge-same { background: #f0f2f5; color: #6b7c93; }
+    .badge-down { background: #fdf0f0; color: #c0392b; }
+
+    /* MOTIVATIONAL */
+    .motivational {
+      background: linear-gradient(135deg, #071a2f 0%, #0d2847 100%);
+      border-radius: 10px; padding: 22px 28px; margin-top: 24px;
+      border-left: 4px solid #c9a84c;
+    }
+    .motivational p { color: #d8e6f0; font-size: 13px; line-height: 1.7; }
+    .motivational p strong { color: #c9a84c; }
+
+    /* FOOTER */
+    .footer {
+      background: #071a2f; padding: 20px 40px;
+      display: flex; align-items: center; justify-content: space-between;
+      margin-top: 32px;
+    }
+    .footer-left { font-size: 11px; color: #4a6a8a; line-height: 1.7; }
+    .footer-left a { color: #c9a84c; text-decoration: none; }
+    .footer-right { font-size: 10px; color: #4a6a8a; text-align: right; }
+  </style>
+</head>
+<body>
+<div class="page">
+
+  <div class="header">
+    <div class="header-logo">
+      <img src="https://personaltrainerhove.co.uk/assets/original-hove-personal-training-logo.png" alt="Hove PT Logo">
+      <div>
+        <div class="brand-name">Hove Personal Training</div>
+        <div class="brand-sub">Brighton &amp; Hove · Est. 2012</div>
+      </div>
+    </div>
+    <div class="header-right">
+      <div class="report-label">Weekly Progress Report</div>
+      <div class="report-period">{{ report_period }}</div>
+    </div>
+  </div>
+
+  <div class="greeting-strip">
+    <div class="greeting-name">Hi {{ client_first_name }} 👋</div>
+    <div class="greeting-para">
+      Here are your stats for the last 4 weeks. Every session builds on the last —
+      keep showing up and the results follow. Here's a look at how you've been
+      progressing across your key lifts and attendance.
+    </div>
+  </div>
+
+  <div class="body">
+
+    <div class="section-label">Your 4-week snapshot</div>
+    <div class="stats-row">
+      <div class="stat-card">
+        <div class="stat-value">{{ sessions_attended }}<span class="stat-unit">/ {{ sessions_scheduled }}</span></div>
+        <div class="stat-label">Sessions Attended</div>
+        <div class="stat-sublabel">Last 4 weeks</div>
+      </div>
+      <div class="stat-card">
+        <div class="stat-value">{{ consistency_pct }}<span class="stat-unit">%</span></div>
+        <div class="stat-label">Consistency</div>
+        <div class="stat-sublabel">Attendance rate</div>
+      </div>
+      <div class="stat-card">
+        <div class="stat-value">{{ current_streak }}<span class="stat-unit">wks</span></div>
+        <div class="stat-label">Current Streak</div>
+        <div class="stat-sublabel">Consecutive weeks attended</div>
+      </div>
+    </div>
+
+    <div class="section-label">Exercise progress — last 4 weeks</div>
+    <div class="charts-grid" id="chartsGrid">
+      <!-- populated by JS below -->
+    </div>
+
+    <div class="section-label">Session breakdown</div>
+    <table class="summary-table">
+      <thead>
+        <tr>
+          <th>Week</th>
+          <th>Date</th>
+          <th>Sessions</th>
+          <th>Top lift</th>
+          <th>vs. prev week</th>
+        </tr>
+      </thead>
+      <tbody id="sessionTableBody">
+        <!-- populated by JS below -->
+      </tbody>
+    </table>
+
+    <div class="motivational">
+      <p>{{ motivational_note }}</p>
+    </div>
+
+  </div>
+
+  <div class="footer">
+    <div class="footer-left">
+      <strong style="color:#a8bcd0;">Hove Personal Training</strong><br>
+      New Church Road, Hove · <a href="https://personaltrainerhove.co.uk">personaltrainerhove.co.uk</a>
+    </div>
+    <div class="footer-right">
+      Generated {{ generated_date }}<br>
+      Report for {{ client_first_name }} {{ client_last_name }}
+    </div>
+  </div>
+
+</div>
+
+<script>
+  // ── injected by generator.py ──
+  const EXERCISES  = {{ exercises_json }};
+  const SESSION_ROWS = {{ session_rows_json }};
+
+  // Build exercise chart cards
+  const grid = document.getElementById('chartsGrid');
+  EXERCISES.forEach((ex, i) => {
+    const isOdd = EXERCISES.length % 2 !== 0;
+    const isLast = i === EXERCISES.length - 1;
+    const card = document.createElement('div');
+    card.className = 'chart-card' + (isOdd && isLast ? ' full-width' : '');
+    card.innerHTML = `
+      <div class="chart-exercise-name">${ex.name}</div>
+      <div class="chart-best">Best this period: <span>${ex.best}</span></div>
+      <div class="chart-wrap"><canvas id="chart_${i}"></canvas></div>
+    `;
+    grid.appendChild(card);
+  });
+
+  // Build session table rows
+  const tbody = document.getElementById('sessionTableBody');
+  SESSION_ROWS.forEach(row => {
+    let badgeHtml = '';
+    if (row.trend === 'up')   badgeHtml = `<span class="badge badge-up">▲ ${row.trend_val}</span>`;
+    else if (row.trend === 'down') badgeHtml = `<span class="badge badge-down">▼ ${row.trend_val}</span>`;
+    else                      badgeHtml = `<span class="badge badge-same">— Same</span>`;
+    tbody.innerHTML += `
+      <tr>
+        <td>Week ${row.week_number}</td>
+        <td>${row.date}</td>
+        <td>${row.attended}</td>
+        <td>${row.top_lift}</td>
+        <td>${badgeHtml}</td>
+      </tr>`;
+  });
+
+  // Draw charts after DOM is populated
+  const chartConfig = {
+    type: 'line',
+    options: {
+      responsive: true,
+      maintainAspectRatio: false,
+      plugins: { legend: { display: false } },
+      scales: {
+        x: { grid: { color: '#f0f2f5' }, ticks: { font: { size: 10 }, color: '#6b7c93' } },
+        y: { grid: { color: '#f0f2f5' }, ticks: { font: { size: 10 }, color: '#6b7c93' }, beginAtZero: false }
+      },
+      elements: {
+        line: { tension: 0.4, borderWidth: 2.5, borderColor: '#c9a84c', fill: true,
+                backgroundColor: 'rgba(201,168,76,0.10)' },
+        point: { radius: 5, backgroundColor: '#c9a84c', borderColor: '#071a2f', borderWidth: 2 }
+      }
+    }
+  };
+
+  EXERCISES.forEach((ex, i) => {
+    const ctx = document.getElementById('chart_' + i);
+    if (!ctx) return;
+    new Chart(ctx, {
+      type: 'line',
+      data: { labels: ex.week_labels, datasets: [{ data: ex.values }] },
+      options: chartConfig.options
+    });
+  });
+</script>
+</body>
+</html>
