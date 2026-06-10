@@ -10,27 +10,36 @@ from datetime import date, timedelta, datetime
 from collections import defaultdict
 from playwright.async_api import async_playwright, Page
 
-TRAINERIZE_URL = "https://app.trainerize.com"
+TRAINERIZE_URL = "https://hovepersonaltraining.trainerize.com"
 
 
 async def login(page: Page) -> None:
-    await page.goto(TRAINERIZE_URL + "/login")
+    await page.goto(TRAINERIZE_URL + "/app/login")
     await page.wait_for_load_state("networkidle")
+    await page.wait_for_timeout(2000)
+    await page.screenshot(path="debug_trainerize_1_login.png")
 
-    await page.fill('input[name="email"]',    os.environ["TRAINERIZE_EMAIL"])    # [SELECTOR]
-    await page.fill('input[name="password"]', os.environ["TRAINERIZE_PASSWORD"]) # [SELECTOR]
-    await page.click('button[type="submit"]')                                      # [SELECTOR]
+    # Selectors confirmed from live DOM inspection
+    await page.wait_for_selector('#emailInput', timeout=15000)
+    await page.fill('#emailInput', os.environ["TRAINERIZE_EMAIL"])
+    await page.fill('#passInput',  os.environ["TRAINERIZE_PASSWORD"])
+    await page.screenshot(path="debug_trainerize_2_filled.png")
+    await page.click('button[type="submit"]')
     await page.wait_for_load_state("networkidle")
-    print("✓ Trainerize: logged in")
+    await page.wait_for_timeout(2000)
+    await page.screenshot(path="debug_trainerize_3_after_login.png")
+    print(f"✓ Trainerize: logged in — URL: {page.url}")
 
 
 async def get_clients(page: Page) -> list[dict]:
     """Return list of {name, email, client_id}."""
-    await page.goto(TRAINERIZE_URL + "/clients")
+    await page.goto(TRAINERIZE_URL + "/app/clients")  # [URL — verify after login screenshot]
     await page.wait_for_load_state("networkidle")
+    await page.wait_for_timeout(2000)
+    await page.screenshot(path="debug_trainerize_4_clients.png")
 
     clients = []
-    # TODO: update after inspecting the live Clients page
+    # TODO: update selectors after inspecting debug_trainerize_4_clients.png
     rows = await page.query_selector_all(".client-list-item")  # [SELECTOR]
     for row in rows:
         name_el  = await row.query_selector(".client-name")   # [SELECTOR]
@@ -156,8 +165,28 @@ async def scrape_all(headless: bool = True) -> dict:
       {email: {exercises: [...], top_lift_by_week: [...]}}
     """
     async with async_playwright() as p:
-        browser = await p.chromium.launch(headless=headless)
-        page    = await browser.new_page()
+        browser = await p.chromium.launch(
+            headless=headless,
+            args=[
+                "--no-sandbox",
+                "--disable-setuid-sandbox",
+                "--disable-blink-features=AutomationControlled",
+                "--disable-dev-shm-usage",
+            ],
+        )
+        context = await browser.new_context(
+            user_agent=(
+                "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+                "AppleWebKit/537.36 (KHTML, like Gecko) "
+                "Chrome/124.0.0.0 Safari/537.36"
+            ),
+            viewport={"width": 1280, "height": 800},
+            locale="en-GB",
+        )
+        await context.add_init_script(
+            "Object.defineProperty(navigator, 'webdriver', {get: () => undefined})"
+        )
+        page = await context.new_page()
 
         await login(page)
         clients = await get_clients(page)
@@ -189,6 +218,7 @@ async def scrape_all(headless: bool = True) -> dict:
                 "top_lift_by_week": top_by_week,
             }
 
+        await context.close()
         await browser.close()
 
     return results
