@@ -1,0 +1,5 @@
+[build]
+builder = "dockerfile"
+
+[deploy]
+cronSchedule = "0 8 * * 1"   # Every Monday at 8am UTC
