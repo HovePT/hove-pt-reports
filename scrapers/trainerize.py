@@ -47,24 +47,68 @@ async def login(page: Page) -> None:
 
 async def get_clients(page: Page) -> list[dict]:
     """Return list of {name, email, client_id}."""
-    await _goto(page, TRAINERIZE_URL + "/app/clients", wait_ms=3000)
+    # Navigate via sidebar nav click — avoids hardcoded URL that gave 404
+    try:
+        await page.click('a:has-text("Clients")', timeout=8000)
+        await page.wait_for_load_state("domcontentloaded")
+        await page.wait_for_timeout(3000)
+    except Exception:
+        # Fallback: try direct URL patterns
+        for url_suffix in ["/app/trainer-clients", "/app/clientsv2", "/app/client-list"]:
+            try:
+                await _goto(page, TRAINERIZE_URL + url_suffix, wait_ms=3000)
+                if "not-found" not in page.url and "404" not in page.url:
+                    break
+            except Exception:
+                continue
+
+    print(f"  Clients page URL: {page.url}")
     await _ss(page, "debug_trainerize_4_clients.png")
 
+    # Dump first 2000 chars of body HTML so we can read real selectors from the logs
+    html_snippet = await page.evaluate("document.body.innerHTML.slice(0, 3000)")
+    print(f"  HTML snippet: {html_snippet[:2000]}")
+
     clients = []
-    # TODO: update selectors after inspecting debug_trainerize_4_clients.png
-    rows = await page.query_selector_all(".client-list-item")  # [SELECTOR]
-    for row in rows:
-        name_el  = await row.query_selector(".client-name")   # [SELECTOR]
-        email_el = await row.query_selector(".client-email")  # [SELECTOR]
-        link_el  = await row.query_selector("a")              # [SELECTOR]
+    # Try multiple likely selector patterns — update after reading the HTML snippet
+    for row_sel in [
+        ".client-list-item",          # placeholder — likely wrong
+        "[data-testid='client-row']",
+        ".client-row",
+        "li.client",
+        "tr.client",
+        ".ClientsList__item",
+        ".clientListItem",
+        "a[href*='/clients/']",       # links containing /clients/ in href
+    ]:
+        rows = await page.query_selector_all(row_sel)
+        if rows:
+            print(f"  Found {len(rows)} rows with selector: {row_sel}")
+            for row in rows:
+                # Try to extract name, email, and href
+                name_el  = await row.query_selector(".client-name, .name, h4, h3, strong")
+                email_el = await row.query_selector(".client-email, .email, [data-email]")
+                link_el  = await row.query_selector("a") if row_sel != "a[href*='/clients/']" else row
 
-        name  = (await name_el.inner_text()).strip()  if name_el  else ""
-        email = (await email_el.inner_text()).strip() if email_el else ""
-        href  = await link_el.get_attribute("href")   if link_el  else ""
-        client_id = href.split("/")[-1] if href else ""
+                name  = (await name_el.inner_text()).strip()  if name_el  else (await row.inner_text()).strip().split("\n")[0]
+                email = (await email_el.inner_text()).strip() if email_el else ""
+                href  = await link_el.get_attribute("href")   if link_el  else ""
+                client_id = href.rstrip("/").split("/")[-1] if href else ""
 
-        if name:
-            clients.append({"name": name, "email": email, "client_id": client_id})
+                if name and name not in ["", "Find a client"]:
+                    clients.append({"name": name, "email": email, "client_id": client_id})
+            break
+
+    if not clients:
+        # Last resort: find any <a> containing /clients/ in href
+        links = await page.query_selector_all("a[href*='/clients/']")
+        print(f"  Fallback: found {len(links)} a[href*=/clients/] links")
+        for link in links[:30]:
+            href = await link.get_attribute("href") or ""
+            text = (await link.inner_text()).strip()
+            cid  = href.rstrip("/").split("/")[-1]
+            if text and cid and len(text) > 2:
+                clients.append({"name": text, "email": "", "client_id": cid})
 
     print(f"✓ Trainerize: found {len(clients)} clients")
     return clients
