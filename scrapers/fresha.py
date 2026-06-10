@@ -15,22 +15,50 @@ from playwright.async_api import async_playwright, Page
 FRESHA_URL = "https://partners.fresha.com"
 
 
+async def _click_continue(page: Page, step: str) -> None:
+    """Try multiple selectors to click the Continue / Submit button."""
+    selectors = [
+        '[data-qa="continue"]',
+        'button[type="submit"]',
+        'button:text("Continue")',
+        'button:text("Sign in")',
+        'input[type="submit"]',
+    ]
+    for sel in selectors:
+        try:
+            loc = page.locator(sel).first
+            await loc.wait_for(state="attached", timeout=5000)
+            await loc.evaluate("el => el.click()")
+            print(f"  clicked {sel} at {step}")
+            return
+        except Exception:
+            continue
+    # Last resort: dump screenshot and raise
+    await page.screenshot(path=f"debug_fresha_{step}_no_button.png")
+    raise RuntimeError(f"Could not find Continue button at step: {step}")
+
+
 async def login(page: Page) -> None:
     # Fresha login is two-step: email → Continue → password → Continue
-    await page.goto(FRESHA_URL + "/users/sign-in")
-    await page.wait_for_load_state("networkidle")
+    await page.goto(FRESHA_URL + "/users/sign-in", wait_until="domcontentloaded")
+    await page.wait_for_timeout(2000)  # let JS render
+    await page.screenshot(path="debug_fresha_1_landing.png")
 
     # Step 1: Enter email and click Continue
-    # Use evaluate() to bypass any overlay/reCAPTCHA div intercepting pointer events
+    email_input = page.locator('input[type="email"]').first
+    await email_input.wait_for(state="attached", timeout=15000)
     await page.fill('input[type="email"]', os.environ["FRESHA_EMAIL"])
-    await page.locator('[data-qa="continue"]').evaluate("el => el.click()")
+    await page.screenshot(path="debug_fresha_2_email_filled.png")
+    await _click_continue(page, "step1")
     await page.wait_for_load_state("networkidle")
+    await page.screenshot(path="debug_fresha_3_after_email.png")
 
     # Step 2: Wait for password field, enter password, submit
     await page.wait_for_selector('input[type="password"]', timeout=15000)
     await page.fill('input[type="password"]', os.environ["FRESHA_PASSWORD"])
-    await page.locator('[data-qa="continue"]').evaluate("el => el.click()")
+    await _click_continue(page, "step2")
     await page.wait_for_load_state("networkidle")
+    await page.screenshot(path="debug_fresha_4_logged_in.png")
     print("✓ Fresha: logged in")
 
 
@@ -167,8 +195,29 @@ def summarise_sessions(sessions: list[dict]) -> dict:
 async def scrape_all(headless: bool = True) -> list[dict]:
     """Main entry — returns list of per-client Fresha summaries."""
     async with async_playwright() as p:
-        browser = await p.chromium.launch(headless=headless)
-        page    = await browser.new_page()
+        browser = await p.chromium.launch(
+            headless=headless,
+            args=[
+                "--no-sandbox",
+                "--disable-setuid-sandbox",
+                "--disable-blink-features=AutomationControlled",
+                "--disable-dev-shm-usage",
+            ],
+        )
+        context = await browser.new_context(
+            user_agent=(
+                "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+                "AppleWebKit/537.36 (KHTML, like Gecko) "
+                "Chrome/124.0.0.0 Safari/537.36"
+            ),
+            viewport={"width": 1280, "height": 800},
+            locale="en-GB",
+        )
+        # Hide webdriver flag so Fresha doesn't detect headless automation
+        await context.add_init_script(
+            "Object.defineProperty(navigator, 'webdriver', {get: () => undefined})"
+        )
+        page = await context.new_page()
 
         await login(page)
         clients = await get_clients(page)
