@@ -21,10 +21,15 @@ async def _ss(page: Page, path: str) -> None:
         print(f"  [screenshot skipped: {e}]")
 
 
+async def _goto(page: Page, url: str, wait_ms: int = 3000) -> None:
+    """Navigate to a URL, wait for domcontentloaded, then a fixed pause.
+    Avoids waiting for networkidle which SPAs never reach due to background polling."""
+    await page.goto(url, wait_until="domcontentloaded")
+    await page.wait_for_timeout(wait_ms)
+
+
 async def login(page: Page) -> None:
-    await page.goto(TRAINERIZE_URL + "/app/login")
-    await page.wait_for_load_state("networkidle")
-    await page.wait_for_timeout(2000)
+    await _goto(page, TRAINERIZE_URL + "/app/login", wait_ms=2000)
     await _ss(page, "debug_trainerize_1_login.png")
 
     # Selectors confirmed from live DOM inspection
@@ -33,17 +38,16 @@ async def login(page: Page) -> None:
     await page.fill('#passInput',  os.environ["TRAINERIZE_PASSWORD"])
     await _ss(page, "debug_trainerize_2_filled.png")
     await page.click('button[type="submit"]')
-    await page.wait_for_load_state("networkidle")
-    await page.wait_for_timeout(2000)
+    # Wait for redirect after login — domcontentloaded is enough
+    await page.wait_for_load_state("domcontentloaded")
+    await page.wait_for_timeout(3000)
     await _ss(page, "debug_trainerize_3_after_login.png")
     print(f"✓ Trainerize: logged in — URL: {page.url}")
 
 
 async def get_clients(page: Page) -> list[dict]:
     """Return list of {name, email, client_id}."""
-    await page.goto(TRAINERIZE_URL + "/app/clients")  # [URL — verify after login screenshot]
-    await page.wait_for_load_state("networkidle")
-    await page.wait_for_timeout(2000)
+    await _goto(page, TRAINERIZE_URL + "/app/clients", wait_ms=3000)
     await _ss(page, "debug_trainerize_4_clients.png")
 
     clients = []
@@ -73,8 +77,7 @@ async def get_workout_logs(page: Page, client_id: str) -> list[dict]:
     """
     cutoff = date.today() - timedelta(days=28)
     url = f"{TRAINERIZE_URL}/clients/{client_id}/workouts/log"  # [URL — verify]
-    await page.goto(url)
-    await page.wait_for_load_state("networkidle")
+    await _goto(page, url, wait_ms=2000)
 
     logs = []
     # TODO: update selectors after inspecting the workout log page
