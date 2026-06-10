@@ -13,21 +13,29 @@ from playwright.async_api import async_playwright, Page
 TRAINERIZE_URL = "https://hovepersonaltraining.trainerize.com"
 
 
+async def _ss(page: Page, path: str) -> None:
+    """Take a screenshot, silently skipping on failure."""
+    try:
+        await page.screenshot(path=path, timeout=10000)
+    except Exception as e:
+        print(f"  [screenshot skipped: {e}]")
+
+
 async def login(page: Page) -> None:
     await page.goto(TRAINERIZE_URL + "/app/login")
     await page.wait_for_load_state("networkidle")
     await page.wait_for_timeout(2000)
-    await page.screenshot(path="debug_trainerize_1_login.png")
+    await _ss(page, "debug_trainerize_1_login.png")
 
     # Selectors confirmed from live DOM inspection
     await page.wait_for_selector('#emailInput', timeout=15000)
     await page.fill('#emailInput', os.environ["TRAINERIZE_EMAIL"])
     await page.fill('#passInput',  os.environ["TRAINERIZE_PASSWORD"])
-    await page.screenshot(path="debug_trainerize_2_filled.png")
+    await _ss(page, "debug_trainerize_2_filled.png")
     await page.click('button[type="submit"]')
     await page.wait_for_load_state("networkidle")
     await page.wait_for_timeout(2000)
-    await page.screenshot(path="debug_trainerize_3_after_login.png")
+    await _ss(page, "debug_trainerize_3_after_login.png")
     print(f"✓ Trainerize: logged in — URL: {page.url}")
 
 
@@ -36,7 +44,7 @@ async def get_clients(page: Page) -> list[dict]:
     await page.goto(TRAINERIZE_URL + "/app/clients")  # [URL — verify after login screenshot]
     await page.wait_for_load_state("networkidle")
     await page.wait_for_timeout(2000)
-    await page.screenshot(path="debug_trainerize_4_clients.png")
+    await _ss(page, "debug_trainerize_4_clients.png")
 
     clients = []
     # TODO: update selectors after inspecting debug_trainerize_4_clients.png
@@ -172,6 +180,8 @@ async def scrape_all(headless: bool = True) -> dict:
                 "--disable-setuid-sandbox",
                 "--disable-blink-features=AutomationControlled",
                 "--disable-dev-shm-usage",
+                "--disable-gpu",
+                "--disable-software-rasterizer",
             ],
         )
         context = await browser.new_context(
