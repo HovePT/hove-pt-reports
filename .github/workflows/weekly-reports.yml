@@ -1,0 +1,36 @@
+name: Weekly Client Reports
+
+on:
+  schedule:
+    - cron: '0 8 * * 1'   # Every Monday at 8am UTC
+  workflow_dispatch:        # Allow manual runs
+
+jobs:
+  send-reports:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install dependencies
+        run: |
+          pip install -r requirements.txt
+          playwright install chromium
+          playwright install-deps chromium
+
+      - name: Run weekly reports
+        env:
+          FRESHA_EMAIL: ${{ secrets.FRESHA_EMAIL }}
+          FRESHA_PASSWORD: ${{ secrets.FRESHA_PASSWORD }}
+          TRAINERIZE_EMAIL: ${{ secrets.TRAINERIZE_EMAIL }}
+          TRAINERIZE_PASSWORD: ${{ secrets.TRAINERIZE_PASSWORD }}
+          GMAIL_ADDRESS: ${{ secrets.GMAIL_ADDRESS }}
+          GMAIL_APP_PASS: ${{ secrets.GMAIL_APP_PASS }}
+        run: python main.py
