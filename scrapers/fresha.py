@@ -15,6 +15,14 @@ from playwright.async_api import async_playwright, Page
 FRESHA_URL = "https://partners.fresha.com"
 
 
+async def _ss(page: Page, path: str) -> None:
+    """Take a screenshot, silently skipping on failure."""
+    try:
+        await page.screenshot(path=path, timeout=10000)
+    except Exception as e:
+        print(f"  [screenshot skipped: {e}]")
+
+
 async def _click_continue(page: Page, step: str) -> None:
     """Try multiple selectors to click the Continue / Submit button."""
     selectors = [
@@ -34,7 +42,7 @@ async def _click_continue(page: Page, step: str) -> None:
         except Exception:
             continue
     # Last resort: dump screenshot and raise
-    await page.screenshot(path=f"debug_fresha_{step}_no_button.png")
+    await _sp(page, f"debug_fresha_{step}_no_button.png")
     raise RuntimeError(f"Could not find Continue button at step: {step}")
 
 
@@ -42,23 +50,23 @@ async def login(page: Page) -> None:
     # Fresha login is two-step: email → Continue → password → Continue
     await page.goto(FRESHA_URL + "/users/sign-in", wait_until="domcontentloaded")
     await page.wait_for_timeout(2000)  # let JS render
-    await page.screenshot(path="debug_fresha_1_landing.png")
+    await _ss(page, "debug_fresha_1_landing.png")
 
     # Step 1: Enter email and click Continue
     email_input = page.locator('input[type="email"]').first
     await email_input.wait_for(state="attached", timeout=15000)
     await page.fill('input[type="email"]', os.environ["FRESHA_EMAIL"])
-    await page.screenshot(path="debug_fresha_2_email_filled.png")
+    await _ss(page, "debug_fresha_2_email_filled.png")
     await _click_continue(page, "step1")
     await page.wait_for_load_state("networkidle")
-    await page.screenshot(path="debug_fresha_3_after_email.png")
+    await _ss(page, "debug_fresha_3_after_email.png")
 
     # Step 2: Wait for password field, enter password, submit
     await page.wait_for_selector('input[type="password"]', timeout=15000)
     await page.fill('input[type="password"]', os.environ["FRESHA_PASSWORD"])
     await _click_continue(page, "step2")
     await page.wait_for_load_state("networkidle")
-    await page.screenshot(path="debug_fresha_4_logged_in.png")
+    await _ss(page, "debug_fresha_4_logged_in.png")
     print("✓ Fresha: logged in")
 
 
@@ -175,7 +183,7 @@ def summarise_sessions(sessions: list[dict]) -> dict:
 
     consistency_pct = round(attended_total / scheduled_total * 100) if scheduled_total else 0
 
-    # Streak = consecutive weeks (most recent first) with ≥ 1 attended session
+    # Streak = consecutive weeks (most recent first) with >= 1 attended session
     streak = 0
     for row in reversed(session_rows):
         if row["_raw_attended"] > 0:
@@ -202,6 +210,8 @@ async def scrape_all(headless: bool = True) -> list[dict]:
                 "--disable-setuid-sandbox",
                 "--disable-blink-features=AutomationControlled",
                 "--disable-dev-shm-usage",
+                "--disable-gpu",
+                "--disable-software-rasterizer",
             ],
         )
         context = await browser.new_context(
