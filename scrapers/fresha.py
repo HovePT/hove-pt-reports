@@ -286,4 +286,55 @@ async def scrape_all(headless: bool = True) -> list[dict]:
                         "attended":    sum(1 for s in wk if s["status"] == "attended"),
                         "scheduled":   sum(1 for s in wk if s["status"] == "scheduled"),
                         "cancelled":   sum(1 for s in wk if s["status"] == "cancelled"),
-                        "no_show":     sum(1 for s in wk if s["status"] == "no-
+                        "no_show":     sum(1 for s in wk if s["status"] == "no-show"),
+                    })
+
+                past = [s for s in sessions if date.fromisoformat(s["date"]) <= today]
+                attended_total  = sum(1 for s in past     if s["status"] == "attended")
+                scheduled_total = sum(1 for s in sessions if s["status"] == "scheduled")
+                cancelled_total = sum(1 for s in sessions if s["status"] == "cancelled")
+                noshows_total   = sum(1 for s in sessions if s["status"] == "no-show")
+
+                denom = attended_total + cancelled_total + noshows_total
+                consistency_pct = round(attended_total / denom * 100) if denom > 0 else 0
+
+                # Current streak: consecutive weeks with >=1 attended (newest to oldest)
+                streak = 0
+                for ws, we in reversed(weeks):
+                    if any(
+                        ws <= date.fromisoformat(s["date"]) <= we
+                        and s["status"] == "attended"
+                        for s in sessions
+                    ):
+                        streak += 1
+                    else:
+                        break
+
+                results.append({
+                    "name":               client["name"],
+                    "email":              client["email"],
+                    "client_id":          client["client_id"],
+                    "sessions_attended":  attended_total,
+                    "sessions_scheduled": scheduled_total,
+                    "consistency_pct":    consistency_pct,
+                    "current_streak":     streak,
+                    "session_rows":       session_rows,
+                })
+
+            await context.close()
+            await browser.close()
+
+        print(f"✓ Fresha: scraped {len(results)} clients", flush=True)
+        return results
+
+    except Exception:
+        print("✗ Fresha scrape_all EXCEPTION:", flush=True)
+        traceback.print_exc()
+        return []
+
+
+if __name__ == "__main__":
+    import json
+    headless = "--inspect" not in sys.argv
+    data = asyncio.run(scrape_all(headless=headless))
+    print(json.dumps(data, indent=2))
