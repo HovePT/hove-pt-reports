@@ -160,7 +160,7 @@ async def get_clients(page: Page) -> list[dict]:
         for link in links[:100]:
             href = await link.get_attribute("href") or ""
             text = (await link.inner_text()).strip()
-     .      parts = [p for p in href.rstrip("/").split("/") if p]
+            parts = [p for p in href.rstrip("/").split("/") if p]
             if parts and parts[-1].isdigit() and len(text) > 2:
                 clients.append({"name": text, "email": "", "client_id": parts[-1]})
 
