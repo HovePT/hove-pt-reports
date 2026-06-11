@@ -1,5 +1,5 @@
 """
-fresha.py - v6: replace wait_for_load_state("networkidle") with wait_for_url().
+fresha.py - v7: handle Fresha email verification step via Gmail IMAP.
 
 Selectors verified against live UI on 2026-06-11:
   - Row:        tr[data-qa^="customer-list-table-row"]
@@ -15,12 +15,19 @@ Selectors verified against live UI on 2026-06-11:
 v3 fix: force=True bypasses actionability checks on submit button.
 v4 fix: page.press('Enter') on input fields — native form submit that no overlay can block.
 v5 fix: log URL/title after landing + 30s timeout on email input.
-v6 fix: post-login wait uses wait_for_url(lambda: "/sign-in" not in url) instead of
-  networkidle — Fresha keeps background connections open so networkidle never fires.
+v6 fix: post-login wait uses wait_for_url(lambda: "/sign-in" not in url).
+v7 fix: Fresha sends email verification code on new-device logins (GitHub Actions = new
+  IP every run). After password submit, detect the code input page and fetch the 6-digit
+  code from Gmail via IM@P using the existing GMAIL_ADDRESS + GMAIL_APP_PASS secrets.
 """
 import asyncio
+import email as _email_lib
+import email.utils
+import imaplib
 import os
+import re
 import sys
+import time
 import traceback
 from datetime import date, timedelta, datetime
 from playwright.async_api import async_playwright, Page
@@ -68,6 +75,66 @@ async def _dismiss_overlays(page: Page) -> None:
     """)
 
 
+def _fetch_fresha_code_imap(min_ts: float) -> str | None:
+    """
+    Synchronous: connect to Gmail via IMAP and return the 6-digit Fresha
+    verification code from an email that arrived after min_ts (epoch seconds).
+    Returns None if not found.
+    """
+    try:
+        M = imaplib.IMAP4_SSL("imap.gmail.com")
+        M.login(os.environ["GMAIL_ADDRESS"], os.environ["GMAIL_APP_PASS"])
+        M.select("inbox")
+        # Search today's emails from fresha
+        today_str = datetime.now().strftime("%d-%b-%Y")
+        _, data = M.search(None, f'(FROM "fresha" SINCE "{today_str}")')
+        ids = data[0].split()
+        if not ids:
+            M.logout()
+            return None
+        # Check from newest to oldest
+        for msg_id in reversed(ids):
+            _, msg_data = M.fetch(msg_id, "(RFC822)")
+            msg = _email_lib.message_from_bytes(msg_data[0][1])
+            # Check arrival time
+            date_str = msg.get("Date", "")
+            try:
+                msg_ts = _email_lib.utils.parsedate_to_datetime(date_str).timestamp()
+            except Exception:
+                msg_ts = 0
+            if msg_ts < min_ts:
+                continue  # email predates this login attempt
+            # Extract body text
+            body = ""
+            if msg.is_multipart():
+                for part in msg.walk():
+                    if part.get_content_type() in ("text/plain", "text/html"):
+                        body += part.get_payload(decode=True).decode("utf-8", errors="ignore")
+            else:
+                body = msg.get_payload(decode=True).decode("utf-8", errors="ignore")
+            m = re.search(r'\b(\d{6})\b', body)
+            if m:
+                M.logout()
+                return m.group(1)
+        M.logout()
+        return None
+    except Exception as e:
+        print(f"  [IMAP error: {e}]", flush=True)
+        return None
+
+
+async def _get_verification_code(min_ts: float) -> str | None:
+    """Poll Gmail IM@P up to 60s for a Fresha verification code."""
+    deadline = time.time() + 60
+    while time.time() < deadline:
+        code = await asyncio.to_thread(_fetch_fresha_code_imap, min_ts)
+        if code:
+            return code
+        print("  [waiting for Fresha verification email...]", flush=True)
+        await asyncio.sleep(5)
+    return None
+
+
 async def login(page: Page) -> None:
     await _goto(page, FRESHA_URL + "/users/sign-in", wait_ms=3000)
     url_after = await page.evaluate("location.href")
@@ -76,37 +143,83 @@ async def login(page: Page) -> None:
     await _ss(page, "debug_fresha_1_landing.png")
     await _dismiss_overlays(page)
 
-    # Step 1: enter email — press Enter to submit (bypasses any overlay on the button)
+    # Step 1: enter email
     await page.wait_for_selector('input[type="email"]', timeout=30000)
     await page.fill('input[type="email"]', os.environ["FRESHA_EMAIL"])
     await _ss(page, "debug_fresha_2_email_filled.png")
     await page.press('input[type="email"]', 'Enter')
 
-    # Step 2: enter password — press Enter to submit
+    # Step 2: enter password
     await page.wait_for_selector('input[type="password"]', timeout=15000)
     await _dismiss_overlays(page)
     await _ss(page, "debug_fresha_3_password.png")
     await page.fill('input[type="password"]', os.environ["FRESHA_PASSWORD"])
-    await page.press('input[type="password"]', 'Enter')
-    # Wait for URL to change away from /sign-in (fires as soon as redirect begins)
-    try:
-        await page.wait_for_url(
-            lambda url: "/sign-in" not in url,
-            timeout=15000,
-            wait_until="commit",
-        )
-    except Exception:
-        # Fallback: click submit button if Enter didn't trigger navigation
-        print("  Enter didn't navigate — trying force click on submit...", flush=True)
-        await page.click('button[type="submit"]', force=True)
-        await page.wait_for_url(
-            lambda url: "/sign-in" not in url,
-            timeout=15000,
-            wait_until="commit",
-        )
-    await page.wait_for_timeout(3000)
-    await _ss(page, "debug_fresha_4_logged_in.png")
 
+    # Record time just before submit so we only accept emails sent after this
+    submit_ts = time.time()
+    await page.press('input[type="password"]', 'Enter')
+
+    # Wait 4s for page to respond, then inspect what we landed on
+    await page.wait_for_timeout(4000)
+    await _ss(page, "debug_fresha_4_after_submit.png")
+    current_url = await page.evaluate("location.href")
+    print(f"  [after submit] URL: {current_url}", flush=True)
+
+    # Check if we're already past sign-in
+    if "/sign-in" not in current_url:
+        print("  Redirected away from sign-in — no verification needed.", flush=True)
+    else:
+        # Still on sign-in page — Fresha likely wants a verification code
+        print("  Still on sign-in — checking for verification code input...", flush=True)
+        verify_input = None
+        for sel in [
+            'input[autocomplete="one-time-code"]',
+            'input[name*="code"]',
+            'input[name*="otp"]',
+            'input[name*="token"]',
+            'input[type="text"][maxlength="6"]',
+            'input[type="number"][maxlength="6"]',
+            'input[type="text"]',   # broad fallback
+        ]:
+            el = await page.query_selector(sel)
+            if el and await el.is_visible():
+                verify_input = el
+                print(f"  Verification input found: {sel}", flush=True)
+                break
+
+        if verify_input:
+            print("  Fetching verification code from Gmail...", flush=True)
+            code = await _get_verification_code(submit_ts)
+            if not code:
+                raise Exception("Timed out waiting for Fresha verification email in Gmail")
+            print(f"  Code received: {code[:2]}****", flush=True)
+            await verify_input.fill(code)
+            await _ss(page, "debug_fresha_5_code_entered.png")
+            await verify_input.press('Enter')
+            await page.wait_for_timeout(2000)
+            # Fallback: click submit if Enter didn't navigate
+            current_url2 = await page.evaluate("location.href")
+            if "/sign-in" in current_url2:
+                submit_btn = await page.query_selector('button[type="submit"]')
+                if submit_btn:
+                    await submit_btn.click(force=True)
+            await page.wait_for_url(
+                lambda url: "/sign-in" not in url,
+                timeout=20000,
+                wait_until="commit",
+            )
+        else:
+            # No verification input visible — try force-clicking submit as last resort
+            print("  No verification input found — trying submit button...", flush=True)
+            await page.click('button[type="submit"]', force=True)
+            await page.wait_for_url(
+                lambda url: "/sign-in" not in url,
+                timeout=15000,
+                wait_until="commit",
+            )
+
+    await page.wait_for_timeout(2000)
+    await _ss(page, "debug_fresha_6_logged_in.png")
     pathname = await page.evaluate("location.pathname")
     print(f"✓ Fresha: logged in – pathname: {pathname}", flush=True)
 
@@ -226,11 +339,7 @@ async def get_sessions_for_client(page: Page, client_id: str) -> list[dict]:
 
     return sessions
 
-
-async def scrape_all(headless: bool = True) -> list[dict]:
-    """
-    Returns list of client dicts ready for the PDF generator:
-    [{name, email, client_id, sessions_attended, sessions_scheduled,
+ded, sessions_scheduled,
       consistency_pct, current_streak, session_rows}]
     """
     try:
