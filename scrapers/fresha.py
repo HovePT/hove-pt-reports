@@ -1,5 +1,5 @@
 """
-fresha.py - v4: use Enter key to submit forms instead of clicking submit button.
+fresha.py - v5: log URL/title after landing + 30s timeout on email input.
 
 Selectors verified against live UI on 2026-06-11:
   - Row:        tr[data-qa^="customer-list-table-row"]
@@ -66,12 +66,15 @@ async def _dismiss_overlays(page: Page) -> None:
 
 
 async def login(page: Page) -> None:
-    await _goto(page, FRESHA_URL + "/users/sign-in", wait_ms=2000)
+    await _goto(page, FRESHA_URL + "/users/sign-in", wait_ms=3000)
+    url_after = await page.evaluate("location.href")
+    title_after = await page.evaluate("document.title")
+    print(f"  [login] landed at: {url_after} | title: {title_after}", flush=True)
     await _ss(page, "debug_fresha_1_landing.png")
     await _dismiss_overlays(page)
 
     # Step 1: enter email — press Enter to submit (bypasses any overlay on the button)
-    await page.wait_for_selector('input[type="email"]', timeout=15000)
+    await page.wait_for_selector('input[type="email"]', timeout=30000)
     await page.fill('input[type="email"]', os.environ["FRESHA_EMAIL"])
     await _ss(page, "debug_fresha_2_email_filled.png")
     await page.press('input[type="email"]', 'Enter')
