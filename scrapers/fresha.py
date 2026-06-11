@@ -1,251 +1,286 @@
 """
-fresha.py — logs into Fresha and extracts session history for all clients
+fresha.py – v2: logs into Fresha and extracts session history for all clients
 over the last 4 weeks.
 
-NOTE: Selectors marked # [SELECTOR] need to be verified against the live UI
-once Chrome is connected. Run `python -m scrapers.fresha --inspect` to
-open a headed browser at the right page.
+Selectors verified against live UI on 2026-06-11:
+  - Row:          tr[data-qa^="customer-list-table-row"]
+  - Client ID:    row data-href attr → split("/").pop()
+  - Name:         td:nth-child(2) p:nth-child(1)
+  - Email:        td:nth-child(2) p:nth-child(2)
+  - Pagination:   [data-qa="pagination-next"]  (aria-disabled="true" = last page)
+  - Appt cards:   [data-qa^="appointment-card-"]
+  - Appt status:  [data-qa="status-label"]
+  - Appt date:    [data-qa="appointment-caption"]  e.g. "Thu 2 Jul 4:30pm  •  Hove PT"
 """
 import asyncio
 import os
-from datetime import date, timedelta
+import sys
+import traceback
+from datetime import date, timedelta, datetime
 from playwright.async_api import async_playwright, Page
 
+sys.stdout.reconfigure(line_buffering=True)
 
 FRESHA_URL = "https://partners.fresha.com"
 
 
 async def _ss(page: Page, path: str) -> None:
-    """Take a screenshot, silently skipping on failure."""
     try:
         await page.screenshot(path=path, timeout=10000)
     except Exception as e:
-        print(f"  [screenshot skipped: {e}]")
+        print(f"  [screenshot skipped: {e}]", flush=True)
 
 
-async def _click_continue(page: Page, step: str) -> None:
-    """Try multiple selectors to click the Continue / Submit button."""
-    selectors = [
-        '[data-qa="continue"]',
-        'button[type="submit"]',
-        'button:text("Continue")',
-        'button:text("Sign in")',
-        'input[type="submit"]',
-    ]
-    for sel in selectors:
-        try:
-            loc = page.locator(sel).first
-            await loc.wait_for(state="attached", timeout=5000)
-            await loc.evaluate("el => el.click()")
-            print(f"  clicked {sel} at {step}")
-            return
-        except Exception:
-            continue
-    # Last resort: dump screenshot and raise
-    await _sp(page, f"debug_fresha_{step}_no_button.png")
-    raise RuntimeError(f"Could not find Continue button at step: {step}")
+async def _goto(page: Page, url: str, wait_ms: int = 3000) -> None:
+    await page.goto(url, wait_until="domcontentloaded")
+    await page.wait_for_timeout(wait_ms)
 
 
 async def login(page: Page) -> None:
-    # Fresha login is two-step: email → Continue → password → Continue
-    await page.goto(FRESHA_URL + "/users/sign-in", wait_until="domcontentloaded")
-    await page.wait_for_timeout(2000)  # let JS render
+    await _goto(page, FRESHA_URL + "/users/sign-in", wait_ms=2000)
     await _ss(page, "debug_fresha_1_landing.png")
 
-    # Step 1: Enter email and click Continue
-    email_input = page.locator('input[type="email"]').first
-    await email_input.wait_for(state="attached", timeout=15000)
+    # Step 1: enter email
+    await page.wait_for_selector('input[type="email"]', timeout=15000)
     await page.fill('input[type="email"]', os.environ["FRESHA_EMAIL"])
     await _ss(page, "debug_fresha_2_email_filled.png")
-    await _click_continue(page, "step1")
-    await page.wait_for_load_state("networkidle")
-    await _ss(page, "debug_fresha_3_after_email.png")
+    await page.click('button[type="submit"]')
 
-    # Step 2: Wait for password field, enter password, submit
+    # Step 2: enter password
     await page.wait_for_selector('input[type="password"]', timeout=15000)
+    await _ss(page, "debug_fresha_3_password.png")
     await page.fill('input[type="password"]', os.environ["FRESHA_PASSWORD"])
-    await _click_continue(page, "step2")
-    await page.wait_for_load_state("networkidle")
+    await page.click('button[type="submit"]')
+    await page.wait_for_load_state("domcontentloaded")
+    await page.wait_for_timeout(5000)
     await _ss(page, "debug_fresha_4_logged_in.png")
-    print("✓ Fresha: logged in")
+
+    pathname = await page.evaluate("location.pathname")
+    print(f"✓ Fresha: logged in – pathname: {pathname}", flush=True)
 
 
 async def get_clients(page: Page) -> list[dict]:
-    """Return list of {name, email, client_id} for all active clients."""
-    await page.goto(FRESHA_URL + "/clients")
-    await page.wait_for_load_state("networkidle")
+    """Return list of {name, email, client_id} for all 55 clients across paginated list."""
+    await _goto(page, FRESHA_URL + "/clients/list", wait_ms=5000)
+    await _ss(page, "debug_fresha_5_clients.png")
 
     clients = []
-    # TODO: update selector after inspecting the live Clients page
-    rows = await page.query_selector_all(".client-row")  # [SELECTOR]
-    for row in rows:
-        name_el  = await row.query_selector(".client-name")   # [SELECTOR]
-        email_el = await row.query_selector(".client-email")  # [SELECTOR]
-        link_el  = await row.query_selector("a")              # [SELECTOR]
+    page_num = 0
 
-        name  = (await name_el.inner_text()).strip()  if name_el  else ""
-        email = (await email_el.inner_text()).strip() if email_el else ""
-        href  = await link_el.get_attribute("href")   if link_el  else ""
-        client_id = href.split("/")[-1] if href else ""
+    while True:
+        page_num += 1
+        try:
+            await page.wait_for_selector('[data-qa="customer-list-table-body"]', timeout=10000)
+        except Exception:
+            print(f"  [clients page {page_num}: table not found, stopping]", flush=True)
+            break
 
-        if name:
-            clients.append({"name": name, "email": email, "client_id": client_id})
+        await page.wait_for_timeout(2000)
+        rows = await page.query_selector_all('tr[data-qa^="customer-list-table-row"]')
+        print(f"  Clients page {page_num}: {len(rows)} rows", flush=True)
 
-    print(f"✓ Fresha: found {len(clients)} clients")
+        for row in rows:
+            data_href  = await row.get_attribute("data-href") or ""
+            client_id  = data_href.split("/")[-1]
+            ps         = await row.query_selector_all("td:nth-child(2) p")
+            name       = (await ps[0].inner_text()).strip() if len(ps) > 0 else ""
+            email      = (await ps[1].inner_text()).strip() if len(ps) > 1 else ""
+            if name and client_id:
+                clients.append({"name": name, "email": email, "client_id": client_id})
+
+        # Pagination
+        next_btn = await page.query_selector('[data-qa="pagination-next"]')
+        if not next_btn:
+            break
+        aria_disabled = await next_btn.get_attribute("aria-disabled")
+        if aria_disabled == "true":
+            break
+        await next_btn.click()
+        await page.wait_for_timeout(3000)
+
+    print(f"✓ Fresha: found {len(clients)} clients", flush=True)
     return clients
+
+
+def _parse_appt_date(caption: str) -> date | None:
+    """
+    Parse appointment date from caption like "Thu 2 Jul 4:30pm  •  Hove Personal Training".
+    Returns a date object or None on failure.
+    """
+    try:
+        date_part = caption.split("•")[0].strip()   # "Thu 2 Jul 4:30pm"
+        parts = date_part.split()                    # ["Thu", "2", "Jul", "4:30pm"]
+        if len(parts) < 3:
+            return None
+        today = date.today()
+        day_str = f"{parts[1]} {parts[2]} {today.year}"
+        appt_date = datetime.strptime(day_str, "%d %b %Y").date()
+        # Year correction for year boundaries
+        if appt_date > today + timedelta(days=60):
+            appt_date = appt_date.replace(year=today.year - 1)
+        elif appt_date < today - timedelta(days=300):
+            appt_date = appt_date.replace(year=today.year + 1)
+        return appt_date
+    except (ValueError, IndexError):
+        return None
 
 
 async def get_sessions_for_client(page: Page, client_id: str) -> list[dict]:
     """
-    Returns sessions from the last 28 days for a single client.
-    Each session: {date, status}  status = 'attended' | 'cancelled' | 'no-show'
+    Returns sessions from the last 28 days.
+    Each entry: {date (ISO str), status}
+    status: 'attended' | 'scheduled' | 'cancelled' | 'no-show'
     """
     cutoff = date.today() - timedelta(days=28)
-    url = f"{FRESHA_URL}/clients/{client_id}/appointments"  # [URL — verify]
-    await page.goto(url)
-    await page.wait_for_load_state("networkidle")
+    url = f"{FRESHA_URL}/clients/list/drawer/clients/{client_id}/appointments"
 
+    try:
+        await _goto(page, url, wait_ms=3000)
+        await page.wait_for_selector('[data-qa^="appointment-card-"]', timeout=10000)
+    except Exception:
+        return []
+
+    cards = await page.query_selector_all('[data-qa^="appointment-card-"]')
     sessions = []
-    # TODO: update selectors after inspecting the client appointment history page
-    rows = await page.query_selector_all(".appointment-row")  # [SELECTOR]
-    for row in rows:
-        date_el   = await row.query_selector(".appointment-date")    # [SELECTOR]
-        status_el = await row.query_selector(".appointment-status")  # [SELECTOR]
 
-        raw_date = (await date_el.inner_text()).strip() if date_el else ""
-        status   = (await status_el.inner_text()).strip().lower() if status_el else ""
-
-        # Parse date — Fresha likely shows "12 May 2025"
-        try:
-            from datetime import datetime
-            session_date = datetime.strptime(raw_date, "%d %b %Y").date()
-        except ValueError:
+    for card in cards:
+        status_el  = await card.query_selector('[data-qa="status-label"]')
+        caption_el = await card.query_selector('[data-qa="appointment-caption"]')
+        if not status_el or not caption_el:
             continue
 
-        if session_date >= cutoff:
-            sessions.append({"date": session_date.isoformat(), "status": status})
+        raw_status  = (await status_el.inner_text()).strip()
+        raw_caption = (await caption_el.inner_text()).strip().replace("\n", " ")
+
+        appt_date = _parse_appt_date(raw_caption)
+        if appt_date is None or appt_date < cutoff:
+            continue
+
+        sl = raw_status.lower()
+        today = date.today()
+        if sl == "completed":
+            status = "attended"
+        elif sl in ("booked", "confirmed") and appt_date <= today:
+            status = "attended"   # past session not yet checked out
+        elif sl in ("booked", "confirmed") and appt_date > today:
+            status = "scheduled"
+        elif sl == "no show":
+            status = "no-show"
+        elif sl == "cancelled":
+            status = "cancelled"
+        else:
+            status = "attended"
+
+        sessions.append({"date": appt_date.isoformat(), "status": status})
 
     return sessions
 
 
-def summarise_sessions(sessions: list[dict]) -> dict:
-    """
-    Given raw session list, return:
-      sessions_attended, sessions_scheduled, consistency_pct,
-      current_streak (weeks), session_rows (for table)
-    """
-    from collections import defaultdict
-    from datetime import datetime
-
-    today = date.today()
-    # Build 4 week buckets (most recent first)
-    weeks = []
-    for w in range(4):
-        week_start = today - timedelta(days=today.weekday() + 7 * (3 - w))
-        week_end   = week_start + timedelta(days=6)
-        weeks.append((week_start, week_end))
-
-    attended_total = 0
-    scheduled_total = 0
-    session_rows = []
-
-    for i, (ws, we) in enumerate(weeks):
-        week_sessions = [
-            s for s in sessions
-            if ws <= date.fromisoformat(s["date"]) <= we
-        ]
-        week_attended  = sum(1 for s in week_sessions if "attended" in s["status"] or "complete" in s["status"])
-        week_scheduled = len(week_sessions)
-
-        attended_total  += week_attended
-        scheduled_total += week_scheduled
-
-        prev_row = session_rows[-1] if session_rows else None
-        if prev_row:
-            if week_attended > prev_row["_raw_attended"]:
-                trend, trend_val = "up", f"+{week_attended - prev_row['_raw_attended']}"
-            elif week_attended < prev_row["_raw_attended"]:
-                trend, trend_val = "down", str(week_attended - prev_row["_raw_attended"])
-            else:
-                trend, trend_val = "same", ""
-        else:
-            trend, trend_val = "same", ""
-
-        session_rows.append({
-            "week_number": i + 1,
-            "date": ws.strftime("%d %b"),
-            "attended": f"{week_attended} / {week_scheduled}",
-            "top_lift": "—",  # filled in by merge with Trainerize data
-            "trend": trend,
-            "trend_val": trend_val,
-            "_raw_attended": week_attended,
-        })
-
-    consistency_pct = round(attended_total / scheduled_total * 100) if scheduled_total else 0
-
-    # Streak = consecutive weeks (most recent first) with >= 1 attended session
-    streak = 0
-    for row in reversed(session_rows):
-        if row["_raw_attended"] > 0:
-            streak += 1
-        else:
-            break
-
-    return {
-        "sessions_attended": attended_total,
-        "sessions_scheduled": scheduled_total,
-        "consistency_pct": consistency_pct,
-        "current_streak": streak,
-        "session_rows": session_rows,
-    }
-
-
 async def scrape_all(headless: bool = True) -> list[dict]:
-    """Main entry — returns list of per-client Fresha summaries."""
-    async with async_playwright() as p:
-        browser = await p.chromium.launch(
-            headless=headless,
-            args=[
-                "--no-sandbox",
-                "--disable-setuid-sandbox",
-                "--disable-blink-features=AutomationControlled",
-                "--disable-dev-shm-usage",
-                "--disable-gpu",
-                "--disable-software-rasterizer",
-            ],
-        )
-        context = await browser.new_context(
-            user_agent=(
-                "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
-                "AppleWebKit/537.36 (KHTML, like Gecko) "
-                "Chrome/124.0.0.0 Safari/537.36"
-            ),
-            viewport={"width": 1280, "height": 800},
-            locale="en-GB",
-        )
-        # Hide webdriver flag so Fresha doesn't detect headless automation
-        await context.add_init_script(
-            "Object.defineProperty(navigator, 'webdriver', {get: () => undefined})"
-        )
-        page = await context.new_page()
+    """
+    Returns list of client dicts ready for the PDF generator:
+    [{name, email, client_id, sessions_attended, sessions_scheduled,
+      consistency_pct, current_streak, session_rows}]
+    """
+    try:
+        async with async_playwright() as p:
+            browser = await p.chromium.launch(
+                headless=headless,
+                args=[
+                    "--no-sandbox",
+                    "--disable-setuid-sandbox",
+                    "--disable-blink-features=AutomationControlled",
+                    "--disable-dev-shm-usage",
+                    "--disable-gpu",
+                    "--disable-software-rasterizer",
+                ],
+            )
+            context = await browser.new_context(
+                user_agent=(
+                    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+                    "AppleWebKit/537.36 (KHTML, like Gecko) "
+                    "Chrome/124.0.0.0 Safari/537.36"
+                ),
+                viewport={"width": 1280, "height": 800},
+                locale="en-GB",
+            )
+            await context.add_init_script(
+                "Object.defineProperty(navigator, 'webdriver', {get: () => undefined})"
+            )
+            page = await context.new_page()
 
-        await login(page)
-        clients = await get_clients(page)
+            await login(page)
+            clients = await get_clients(page)
 
-        results = []
-        for client in clients:
-            sessions = await get_sessions_for_client(page, client["client_id"])
-            summary  = summarise_sessions(sessions)
-            results.append({**client, **summary})
+            today = date.today()
 
-        await browser.close()
+            # Build 4-week windows (Mon–Sun, most recent last)
+            weeks = []
+            for w in range(4):
+                ws = today - timedelta(days=today.weekday() + 7 * (3 - w))
+                we = ws + timedelta(days=6)
+                weeks.append((ws, we))
 
-    return results
+            results = []
+            for client in clients:
+                print(f"  Scraping sessions for {client['name']}…", flush=True)
+                sessions = await get_sessions_for_client(page, client["client_id"])
+
+                # Per-week breakdown
+                session_rows = []
+                for ws, we in weeks:
+                    wk = [s for s in sessions if ws <= date.fromisoformat(s["date"]) <= we]
+                    session_rows.append({
+                        "week_label":  ws.strftime("%-d %b"),
+                        "attended":    sum(1 for s in wk if s["status"] == "attended"),
+                        "scheduled":   sum(1 for s in wk if s["status"] == "scheduled"),
+                        "cancelled":   sum(1 for s in wk if s["status"] == "cancelled"),
+                        "no_show":     sum(1 for s in wk if s["status"] == "no-show"),
+                    })
+
+                past = [s for s in sessions if date.fromisoformat(s["date"]) <= today]
+                attended_total  = sum(1 for s in past    if s["status"] == "attended")
+                scheduled_total = sum(1 for s in sessions if s["status"] == "scheduled")
+                cancelled_total = sum(1 for s in sessions if s["status"] == "cancelled")
+                noshows_total   = sum(1 for s in sessions if s["status"] == "no-show")
+
+                denom = attended_total + cancelled_total + noshows_total
+                consistency_pct = round(attended_total / denom * 100) if denom > 0 else 0
+
+                # Current streak: consecutive weeks with ≥1 attended session (newest → oldest)
+                streak = 0
+                for ws, we in reversed(weeks):
+                    if any(ws <= date.fromisoformat(s["date"]) <= we and s["status"] == "attended"
+                           for s in sessions):
+                        streak += 1
+                    else:
+                        break
+
+                results.append({
+                    "name":               client["name"],
+                    "email":              client["email"],
+                    "client_id":          client["client_id"],
+                    "sessions_attended":  attended_total,
+                    "sessions_scheduled": scheduled_total,
+                    "consistency_pct":    consistency_pct,
+                    "current_streak":     streak,
+                    "session_rows":       session_rows,
+                })
+
+            await context.close()
+            await browser.close()
+
+        print(f"✓ Fresha: scraped {len(results)} clients", flush=True)
+        return results
+
+    except Exception:
+        print("✗ Fresha scrape_all EXCEPTION:", flush=True)
+        traceback.print_exc()
+        return []
 
 
 if __name__ == "__main__":
-    import sys
+    import json
     headless = "--inspect" not in sys.argv
     data = asyncio.run(scrape_all(headless=headless))
-    import json
     print(json.dumps(data, indent=2))
