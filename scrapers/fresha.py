@@ -179,7 +179,7 @@ async def login(page: Page) -> None:
             'input[name*="token"]',
             'input[type="text"][maxlength="6"]',
             'input[type="number"][maxlength="6"]',
-            'input[type="text"]',   # broad fallback
+            'input[type="text"]',
         ]:
             el = await page.query_selector(sel)
             if el and await el.is_visible():
@@ -197,7 +197,6 @@ async def login(page: Page) -> None:
             await _ss(page, "debug_fresha_5_code_entered.png")
             await verify_input.press('Enter')
             await page.wait_for_timeout(2000)
-            # Fallback: click submit if Enter didn't navigate
             current_url2 = await page.evaluate("location.href")
             if "/sign-in" in current_url2:
                 submit_btn = await page.query_selector('button[type="submit"]')
@@ -209,7 +208,6 @@ async def login(page: Page) -> None:
                 wait_until="commit",
             )
         else:
-            # No verification input visible — try force-clicking submit as last resort
             print("  No verification input found — trying submit button...", flush=True)
             await page.click('button[type="submit"]', force=True)
             await page.wait_for_url(
@@ -263,7 +261,7 @@ async def get_clients(page: Page) -> list[dict]:
         await next_btn.click()
         await page.wait_for_timeout(3000)
 
-    print(f"✓ Fresha: found {len(clients)} clients", flush=True)
+    print(f"✒ Fresha: found {len(clients)} clients", flush=True)
     return clients
 
 
@@ -339,7 +337,11 @@ async def get_sessions_for_client(page: Page, client_id: str) -> list[dict]:
 
     return sessions
 
-ded, sessions_scheduled,
+
+async def scrape_all(headless: bool = True) -> list[dict]:
+    """
+    Returns list of client dicts ready for the PDF generator:
+    [{name, email, client_id, sessions_attended, sessions_scheduled,
       consistency_pct, current_streak, session_rows}]
     """
     try:
@@ -433,7 +435,7 @@ ded, sessions_scheduled,
             await context.close()
             await browser.close()
 
-        print(f"✓ Fresha: scraped {len(results)} clients", flush=True)
+        print(f"✒ Fresha: scraped {len(results)} clients", flush=True)
         return results
 
     except Exception:
