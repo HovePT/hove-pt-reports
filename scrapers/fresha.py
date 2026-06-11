@@ -1,5 +1,5 @@
 """
-fresha.py - v5: log URL/title after landing + 30s timeout on email input.
+fresha.py - v6: replace wait_for_load_state("networkidle") with wait_for_url().
 
 Selectors verified against live UI on 2026-06-11:
   - Row:        tr[data-qa^="customer-list-table-row"]
@@ -10,10 +10,13 @@ Selectors verified against live UI on 2026-06-11:
   - Appt cards: [data-qa^="appointment-card-"]
   - Status:     [data-qa="status-label"]
   - Caption:    [data-qa="appointment-caption"]
+  - Cookie btn: button[data-qa*="accept"] (confirmed working)
 
 v3 fix: force=True bypasses actionability checks on submit button.
 v4 fix: page.press('Enter') on input fields — native form submit that no overlay can block.
-  Also switched wait_for_load_state to "networkidle" for more reliable post-login detection.
+v5 fix: log URL/title after landing + 30s timeout on email input.
+v6 fix: post-login wait uses wait_for_url(lambda: "/sign-in" not in url) instead of
+  networkidle — Fresha keeps background connections open so networkidle never fires.
 """
 import asyncio
 import os
@@ -85,16 +88,26 @@ async def login(page: Page) -> None:
     await _ss(page, "debug_fresha_3_password.png")
     await page.fill('input[type="password"]', os.environ["FRESHA_PASSWORD"])
     await page.press('input[type="password"]', 'Enter')
-    await page.wait_for_load_state("networkidle", timeout=15000)
+    # Wait for URL to change away from /sign-in (fires as soon as redirect begins)
+    try:
+        await page.wait_for_url(
+            lambda url: "/sign-in" not in url,
+            timeout=15000,
+            wait_until="commit",
+        )
+    except Exception:
+        # Fallback: click submit button if Enter didn't trigger navigation
+        print("  Enter didn't navigate — trying force click on submit...", flush=True)
+        await page.click('button[type="submit"]', force=True)
+        await page.wait_for_url(
+            lambda url: "/sign-in" not in url,
+            timeout=15000,
+            wait_until="commit",
+        )
+    await page.wait_for_timeout(3000)
     await _ss(page, "debug_fresha_4_logged_in.png")
 
     pathname = await page.evaluate("location.pathname")
-    if "/sign-in" in pathname:
-        # Still on login page — try clicking the submit button as fallback
-        print(f"  Still on sign-in after Enter, trying button click...", flush=True)
-        await page.click('button[type="submit"]', force=True)
-        await page.wait_for_load_state("networkidle", timeout=15000)
-        pathname = await page.evaluate("location.pathname")
     print(f"✓ Fresha: logged in – pathname: {pathname}", flush=True)
 
 
@@ -273,55 +286,4 @@ async def scrape_all(headless: bool = True) -> list[dict]:
                         "attended":    sum(1 for s in wk if s["status"] == "attended"),
                         "scheduled":   sum(1 for s in wk if s["status"] == "scheduled"),
                         "cancelled":   sum(1 for s in wk if s["status"] == "cancelled"),
-                        "no_show":     sum(1 for s in wk if s["status"] == "no-show"),
-                    })
-
-                past = [s for s in sessions if date.fromisoformat(s["date"]) <= today]
-                attended_total  = sum(1 for s in past     if s["status"] == "attended")
-                scheduled_total = sum(1 for s in sessions if s["status"] == "scheduled")
-                cancelled_total = sum(1 for s in sessions if s["status"] == "cancelled")
-                noshows_total   = sum(1 for s in sessions if s["status"] == "no-show")
-
-                denom = attended_total + cancelled_total + noshows_total
-                consistency_pct = round(attended_total / denom * 100) if denom > 0 else 0
-
-                # Current streak: consecutive weeks with >=1 attended (newest to oldest)
-                streak = 0
-                for ws, we in reversed(weeks):
-                    if any(
-                        ws <= date.fromisoformat(s["date"]) <= we
-                        and s["status"] == "attended"
-                        for s in sessions
-                    ):
-                        streak += 1
-                    else:
-                        break
-
-                results.append({
-                    "name":               client["name"],
-                    "email":              client["email"],
-                    "client_id":          client["client_id"],
-                    "sessions_attended":  attended_total,
-                    "sessions_scheduled": scheduled_total,
-                    "consistency_pct":    consistency_pct,
-                    "current_streak":     streak,
-                    "session_rows":       session_rows,
-                })
-
-            await context.close()
-            await browser.close()
-
-        print(f"✓ Fresha: scraped {len(results)} clients", flush=True)
-        return results
-
-    except Exception:
-        print("✗ Fresha scrape_all EXCEPTION:", flush=True)
-        traceback.print_exc()
-        return []
-
-
-if __name__ == "__main__":
-    import json
-    headless = "--inspect" not in sys.argv
-    data = asyncio.run(scrape_all(headless=headless))
-    print(json.dumps(data, indent=2))
+                        "no_show":     sum(1 for s in wk if s["status"] == "no-
